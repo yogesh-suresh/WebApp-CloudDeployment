@@ -1,11 +1,6 @@
 # csye6225-fall2018
 Repository for coursework of CSYE 6225 - Network Structures and Cloud Computing
 
-### Team Members:
-1. Ann Sara Sajee (sajee.a@husky.neu.edu)
-2. Nitesh Machireddy (machireddychaitany.n@husky.neu.edu)
-3. Yogesh (suresh.y@husky.neu.edu)
-
 ### Prerequisites for building and deploying your application locally.
 1. Install jq
 2. Install AWS CLI
