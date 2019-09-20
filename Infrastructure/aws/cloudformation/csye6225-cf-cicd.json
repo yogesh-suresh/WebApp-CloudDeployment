@@ -1,0 +1,349 @@
+{
+	"AWSTemplateFormatVersion": "2010-09-09",
+	"Description": "CICD stack for CSYE 6225 - Fall 2018",
+	"Parameters": {
+		"CICDStackNameParameter": {
+			"Description": "CICD Stack Name",
+			"Type": "String"
+		},
+		"DomainNameParameter": {
+			"Description": "Domain Name",
+			"Type": "String"
+		},
+		"CodedeployAppNameParameter": {
+			"Description": "Codedeploy Application Name Parameter",
+			"Type": "String"
+		},
+		"AWSRegionParameter": {
+			"Description": "AWSRegion",
+			"Type": "String",
+			"Default": "us-east-1"
+		},
+		"LambdaS3BucketParameter": {
+			"Description": "S3 Bucket Lambda",
+			"Type": "String",
+			"Default": "lambdabucket"
+		}
+	},
+	"Resources": {
+		"S3BucketCICD": {
+			"Type": "AWS::S3::Bucket",
+			"Properties": {
+				"BucketName" : {
+						"Fn::Sub": "code-deploy.${DomainNameParameter}"
+					}
+			}
+		},
+		"S3BucketLambda": {
+			"Type": "AWS::S3::Bucket",
+			"Properties": {
+				"BucketName" : {
+						"Fn::Sub": "csye6225-${LambdaS3BucketParameter}"
+					}
+			}
+		},
+		"CodedeployApplication": {
+			"Type": "AWS::CodeDeploy::Application",
+			"Properties": {
+				"ApplicationName": {
+					"Fn::Sub": "${CodedeployAppNameParameter}"
+				}
+			}
+		},
+		"CodeDeployDeploymentGroup":{
+				"Type": "AWS::CodeDeploy::DeploymentGroup",
+				"Properties": {
+						"ApplicationName": {"Fn::Sub": "${CodedeployAppNameParameter}"},
+						"DeploymentGroupName":{"Fn::Sub": "${CodedeployAppNameParameter}"},
+						"DeploymentConfigName":"CodeDeployDefault.AllAtOnce",
+						"Ec2TagFilters": [ {
+								"Key": "CodeDeployTag",
+								"Type": "KEY_AND_VALUE",
+								"Value": "Deploy"
+							} ],
+						"ServiceRoleArn": {
+							"Fn::GetAtt": [
+							"CodeDeployServiceRole",
+							"Arn"
+						] }
+				}
+		},
+		"TravisUpdateLambda": {
+			"Type": "AWS::IAM::Policy",
+			"Properties": {
+				"PolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [
+						{
+							"Effect": "Allow",
+							"Action": [
+								"lambda:UpdateFunctionCode"
+							],
+							"Resource": [
+										"*"
+							]
+						}
+					]
+				},
+				"PolicyName": "TravisUpdateLambda",
+				"Users": [
+					"TravisCI"
+				]
+			}
+		},
+		"TravisUploadToS3": {
+			"Type": "AWS::IAM::Policy",
+			"Properties": {
+				"PolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [
+						{
+							"Effect": "Allow",
+							"Action": [
+								"s3:PutObject",
+								"s3:GetObject"
+							],
+							"Resource": [
+								{
+									"Fn::Sub": "arn:aws:s3:::code-deploy.${DomainNameParameter}/*"
+								},
+								{
+									"Fn::Sub": "arn:aws:s3:::csye6225-${LambdaS3BucketParameter}/*"
+								}
+							]
+						}
+					]
+				},
+				"PolicyName": "Travis-Upload-To-S3",
+				"Users": [
+					"TravisCI"
+				]
+			}
+		},
+		"CodeDeployEC2S3": {
+			"Type": "AWS::IAM::Policy",
+			"Properties": {
+				"PolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [
+						{
+							"Action": [
+								"s3:GetObject",
+								"s3:GetObjectAcl"
+							],
+							"Effect": "Allow",
+							"Resource": [
+								{
+									"Fn::Sub": "arn:aws:s3:::code-deploy.${DomainNameParameter}/*"
+								}
+							]
+						}
+					]
+				},
+				"PolicyName": "CodeDeploy-EC2-S3",
+				"Roles": [
+					{
+						"Ref": "CodeDeployEC2ServiceRole"
+					}
+				]
+			}
+		},
+		"TravisCodeDeploy": {
+			"Type": "AWS::IAM::Policy",
+			"Properties": {
+				"PolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [
+						{
+							"Effect": "Allow",
+							"Action": [
+								"codedeploy:RegisterApplicationRevision",
+								"codedeploy:GetApplicationRevision"
+							],
+							"Resource": [
+								{
+									"Fn::Sub": "arn:aws:codedeploy:${AWSRegionParameter}:${AWS::AccountId}:application:${CodedeployAppNameParameter}"
+								}
+							]
+						},
+						{
+							"Effect": "Allow",
+							"Action": [
+								"codedeploy:CreateDeployment",
+								"codedeploy:GetDeployment"
+							],
+							"Resource": [
+								"*"
+							]
+						},
+						{
+							"Effect": "Allow",
+							"Action": [
+								"codedeploy:GetDeploymentConfig"
+							],
+							"Resource": [
+								{
+									"Fn::Sub": "arn:aws:codedeploy:${AWSRegionParameter}:${AWS::AccountId}:deploymentconfig:CodeDeployDefault.OneAtATime"
+								},
+								{
+									"Fn::Sub": "arn:aws:codedeploy:${AWSRegionParameter}:${AWS::AccountId}:deploymentconfig:CodeDeployDefault.HalfAtATime"
+								},
+								{
+									"Fn::Sub": "arn:aws:codedeploy:${AWSRegionParameter}:${AWS::AccountId}:deploymentconfig:CodeDeployDefault.AllAtOnce"
+								}
+							]
+						}
+					]
+				},
+				"PolicyName": "Travis-Code-Deploy",
+				"Users": [
+					"TravisCI"
+				]
+			}
+		},
+		"CodeDeployServiceRole": {
+			"Type": "AWS::IAM::Role",
+			"Properties": {
+				"AssumeRolePolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [
+						{
+							"Effect": "Allow",
+							"Principal": {
+								"Service": [
+									"codedeploy.amazonaws.com"
+								]
+							},
+							"Action": [
+								"sts:AssumeRole"
+							]
+						}
+					]
+				},
+				"Policies":[
+					{
+						"PolicyName":"AWSCodeDeployRole",
+						"PolicyDocument":{
+							"Version": "2012-10-17",
+							"Statement": [
+								{
+									"Effect": "Allow",
+									"Action": [
+										"autoscaling:CompleteLifecycleAction",
+										"autoscaling:DeleteLifecycleHook",
+										"autoscaling:DescribeAutoScalingGroups",
+										"autoscaling:DescribeLifecycleHooks",
+										"autoscaling:PutLifecycleHook",
+										"autoscaling:RecordLifecycleActionHeartbeat",
+										"autoscaling:CreateAutoScalingGroup",
+										"autoscaling:UpdateAutoScalingGroup",
+										"autoscaling:EnableMetricsCollection",
+										"autoscaling:DescribeAutoScalingGroups",
+										"autoscaling:DescribePolicies",
+										"autoscaling:DescribeScheduledActions",
+										"autoscaling:DescribeNotificationConfigurations",
+										"autoscaling:DescribeLifecycleHooks",
+										"autoscaling:SuspendProcesses",
+										"autoscaling:ResumeProcesses",
+										"autoscaling:AttachLoadBalancers",
+										"autoscaling:PutScalingPolicy",
+										"autoscaling:PutScheduledUpdateGroupAction",
+										"autoscaling:PutNotificationConfiguration",
+										"autoscaling:PutLifecycleHook",
+										"autoscaling:DescribeScalingActivities",
+										"autoscaling:DeleteAutoScalingGroup",
+										"ec2:DescribeInstances",
+										"ec2:DescribeInstanceStatus",
+										"ec2:TerminateInstances",
+										"tag:GetTags",
+										"tag:GetResources",
+										"sns:Publish",
+										"cloudwatch:DescribeAlarms",
+										"cloudwatch:PutMetricAlarm",
+										"elasticloadbalancing:DescribeLoadBalancers",
+										"elasticloadbalancing:DescribeInstanceHealth",
+										"elasticloadbalancing:RegisterInstancesWithLoadBalancer",
+										"elasticloadbalancing:DeregisterInstancesFromLoadBalancer",
+										"elasticloadbalancing:DescribeTargetGroups",
+										"elasticloadbalancing:DescribeTargetHealth",
+										"elasticloadbalancing:RegisterTargets",
+										"elasticloadbalancing:DeregisterTargets"
+									],
+									"Resource": "*"
+								}
+							]
+						}
+					}
+				],
+				"RoleName": "CodeDeployServiceRole"
+			}
+		},
+		"CodeDeployEC2ServiceRole": {
+			"Type": "AWS::IAM::Role",
+			"Properties": {
+				"AssumeRolePolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [
+						{
+							"Effect": "Allow",
+							"Principal": {
+								"Service": [
+									"ec2.amazonaws.com"
+								]
+							},
+							"Action": [
+								"sts:AssumeRole"
+							]
+						}
+					]
+				},
+				"RoleName": "CodeDeployEC2ServiceRole"
+			}
+		},
+		"CloudWatchAgentEC2Policy": {
+		  "Type": "AWS::IAM::Policy",
+		  "Properties": {
+						"PolicyName":"CloudWatchAgentEC2Policy",
+						"PolicyDocument":{
+			        "Version": "2012-10-17",
+			        "Statement": [
+			            {
+			                "Effect": "Allow",
+			                "Action": [
+			                    "cloudwatch:PutMetricData",
+			                    "ec2:DescribeTags",
+			                    "logs:PutLogEvents",
+			                    "logs:DescribeLogStreams",
+			                    "logs:DescribeLogGroups",
+			                    "logs:CreateLogStream",
+			                    "logs:CreateLogGroup"
+			                ],
+			                "Resource": "*"
+			            },
+			            {
+			                "Effect": "Allow",
+			                "Action": [
+			                    "ssm:GetParameter"
+			                ],
+			                "Resource": "arn:aws:ssm:*:*:parameter/AmazonCloudWatch-*"
+			            }
+			        ]
+					},
+		    "Roles":[ { "Ref": "CodeDeployEC2ServiceRole"} ]
+				}
+		  }
+	},
+	"Outputs": {
+		"S3BucketCICD": {
+			"Description": "S3 Bucket CICD",
+			"Value": {
+				"Ref": "S3BucketCICD"
+			},
+			"Export": {
+				"Name": {
+					"Fn::Sub": "${AWS::StackName}-S3BucketCICDID"
+				}
+			}
+		}
+	}
+}

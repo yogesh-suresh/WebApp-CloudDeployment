@@ -1,0 +1,509 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Application Stack for CSYE 6225 - Fall 2018",
+  "Parameters": {
+    "NetworkStackNameParameter": {
+      "Description": "Network Stack Name",
+      "Type": "String"
+    },
+    "ApplicationStackNameParameter": {
+      "Description": "Application Stack Name",
+      "Type": "String"
+    },
+    "KeyName": {
+      "Description": "EC2 KeyPair to enable SSH access to the instance",
+      "Type": "AWS::EC2::KeyPair::KeyName"
+    },
+    "DomainNameParameter": {
+      "Description": "Domain name for s3",
+      "Type": "String"
+    },
+    "RDSUserName": {
+      "Description":"Username for RDS instance",
+      "Type":"String"
+    },
+    "RDSPassword":{
+      "Description": "Password for RDS instance",
+      "Type": "String"
+    }
+  },
+  "Resources": {
+    "SNSTopic" : {
+       "Type" : "AWS::SNS::Topic",
+       "Properties" : {
+          "Subscription" : [
+             { "Endpoint" :{"Fn::Sub" : "arn:aws:lambda:us-east-1:${AWS::AccountId}:function:lambda"}, "Protocol" : "lambda" }
+          ],
+          "TopicName" : "password_reset"
+       }
+    },
+    "ElasticIPAddress":{
+       "Type" : "AWS::EC2::EIP",
+       "Properties" : {
+          "Domain" : {
+            "Fn::ImportValue": {
+            "Fn::Sub": "${NetworkStackNameParameter}-VpcID"
+          }
+        }
+       }
+     },
+     "EIPAssociation":{
+       "Type": "AWS::EC2::EIPAssociation",
+       "Properties": {
+         "AllocationId":{ "Fn::GetAtt" : [ "ElasticIPAddress", "AllocationId" ]},
+          "InstanceId": {"Ref":"EC2Instance"}
+       }
+    },
+    "EC2Instance": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "ImageId": "ami-9887c6e7",
+        "AvailabilityZone": "us-east-1a",
+        "InstanceType": "t2.micro",
+        "KeyName": {
+          "Ref": "KeyName"
+        },
+        "IamInstanceProfile": "EC2InstanceProfile",
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": [
+              "\n",
+              [
+                "#!/bin/bash -xe ",
+                "cd /home/centos",
+                "touch .log",
+                "curl --silent --location https://rpm.nodesource.com/setup_8.x | bash - >> .log",
+                "echo 'installing node' >> .log",
+                "yum -y install nodejs >> .log",
+                "touch .env",
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "export RDS_HOSTNAME=",
+                      {
+                        "Fn::GetAtt": [
+                          "RDSInstance",
+                          "Endpoint.Address"
+                        ]
+                      }
+                    ]
+                  ]
+                },
+                "echo $RDS_HOSTNAME >> .env",
+                {
+                  "Fn::Join":[
+                    "",
+                    [
+                      "export RDS_USERNAME=",
+                      {
+                        "Fn::Sub": "${RDSUserName}"
+                      }
+                    ]
+                  ]
+                },
+                "echo $RDS_USERNAME >> .env",
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "export RDS_PASSWORD=",
+                      {
+                        "Fn::Sub": "${RDSPassword}"
+                      }
+                    ]
+                  ]
+                },
+                "echo $RDS_PASSWORD >> .env",
+                "export RDS_PORT=3306",
+                "echo $RDS_PORT >> .env",
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "export S3_BUCKET=",
+                      {
+                        "Fn::Sub": "${DomainNameParameter}.csye6225.com"
+                      }
+                    ]
+                  ]
+                },
+                "echo $S3_BUCKET >> .env",
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "export TOPIC=",
+                      {
+                        "Fn::Sub" : "arn:aws:sns:us-east-1:${AWS::AccountId}:password_reset"
+                      }
+                    ]
+                  ]
+                },
+                "echo $TOPIC >> .env",
+                "echo 'Yum update' >> .log",
+                "yum -y update >> .log",
+                "echo 'installing ruby' >> .log",
+                "yum -y install ruby",
+                "echo 'installing wget' >> .log",
+                "yum -y install wget",
+                "echo 'getting code deploy agent' >> .log",
+                "wget https://aws-codedeploy-us-east-1.s3.amazonaws.com/latest/install >> .log",
+                "chmod +x ./install >> .log",
+                "./install auto >> .log",
+                "echo 'installing cloudwatch agent' >> .log",
+                "wget https://s3.amazonaws.com/amazoncloudwatch-agent/centos/amd64/latest/amazon-cloudwatch-agent.rpm >> .log",
+                "rpm -U ./amazon-cloudwatch-agent.rpm",
+                "echo 'Cloudwatch agent installed' >> .log",
+                "cd /opt && touch cloudwatch-config.json",
+                "echo '{\"agent\":{\"metrics_collection_interval\":10,\"logfile\":\"\/var\/logs\/amazon-cloudwatch-agent.log\"},\"logs\":{\"logs_collected\":{\"files\":{\"collect_list\":[{\"file_path\":\"\/home\/centos\/.pm2\/logs\/server-out.log\",\"log_group_name\":\"server-out.log\"}]}}},\"metrics\":{\"metrics_collected\":{\"statsd\":{\"metrics_aggregation_interval\":0,\"metrics_collection_interval\":10,\"service_address\":\":8125\"}}}}' >> cloudwatch-config.json",
+                "sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/cloudwatch-config.json -s >> .log",
+                "sysmtcl restart amazon-cloudwatch-agent-ctl >> .log",
+                "echo 'installing finished' >> .log"
+              ]
+            ]
+          }
+        },
+        "SubnetId": {
+          "Fn::ImportValue": {
+            "Fn::Sub": "${NetworkStackNameParameter}-PublicSubnetID1"
+          }
+        },
+        "SecurityGroupIds": [
+          {
+            "Ref": "WebServerSecurityGroup"
+          }
+        ],
+        "DisableApiTermination": false,
+        "BlockDeviceMappings": [
+          {
+            "DeviceName": "/dev/sda1",
+            "Ebs": {
+              "DeleteOnTermination": true,
+              "VolumeSize": 20,
+              "VolumeType": "gp2"
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-csye6225-EC2Instance"
+            }
+          },
+          {
+            "Key": "CodeDeployTag",
+            "Value": "Deploy"
+          }
+        ]
+      }
+    },
+    "EC2InstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Roles": ["CodeDeployEC2ServiceRole"],
+        "InstanceProfileName": "EC2InstanceProfile"
+      }
+    },
+    "EC2SNS": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                  "sns:Publish"
+              ],
+              "Resource": "arn:aws:sns:*:*:*"
+          }
+          ]
+        },
+        "PolicyName": "EC2SNS",
+        "Roles": [
+          "CodeDeployEC2ServiceRole"
+        ]
+      }
+    },
+    "EC2S3": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Action": [
+                "s3:*"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Sub": "arn:aws:s3:::${DomainNameParameter}.csye6225.com/*"
+                },{
+                  "Fn::Sub": "arn:aws:s3:::${DomainNameParameter}.csye6225.com"
+                }
+              ]
+            },{
+              "Action": [
+                "s3:ListAllMyBuckets"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ]
+        },
+        "PolicyName": "EC2-S3",
+        "Roles": [
+          "CodeDeployEC2ServiceRole"
+        ]
+      }
+    },
+    "WebServerSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupName": "csye6225-webapp",
+        "GroupDescription": "Enable HTTP access via port 80, SSH access via port 22, HTTPS access via port 443",
+        "VpcId": {
+          "Fn::ImportValue": {
+            "Fn::Sub": "${NetworkStackNameParameter}-VpcID"
+          }
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "80",
+            "ToPort": "80",
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "22",
+            "ToPort": "22",
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "443",
+            "ToPort": "443",
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+              "IpProtocol": "tcp",
+              "FromPort": "3001",
+              "ToPort": "3001",
+              "CidrIp": "0.0.0.0/0"
+            }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-csye6225-WebAppSecurityGroup"
+            }
+          }
+        ]
+      }
+    },
+    "DBServerSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupName": "csye6225-rds",
+        "GroupDescription": "Allow TCP traffic on port 3306 for MySQL",
+        "VpcId": {
+          "Fn::ImportValue": {
+            "Fn::Sub": "${NetworkStackNameParameter}-VpcID"
+          }
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 3306,
+            "ToPort": 3306,
+            "SourceSecurityGroupId": {
+              "Ref": "WebServerSecurityGroup"
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-csye6225-DBSecurityGroup"
+            }
+          }
+        ]
+      }
+    },
+    "RDSSubnetGroup": {
+      "Type": "AWS::RDS::DBSubnetGroup",
+      "Properties": {
+        "DBSubnetGroupDescription": "Subnet group for RDS Instances",
+        "SubnetIds": [
+          {
+            "Fn::ImportValue": {
+              "Fn::Sub": "${NetworkStackNameParameter}-PublicSubnetID1"
+            }
+          },
+          {
+            "Fn::ImportValue": {
+              "Fn::Sub": "${NetworkStackNameParameter}-PrivateSubnetID1"
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-csye6225-RDSSubnetGroup"
+            }
+          }
+        ]
+      }
+    },
+    "RDSInstance": {
+      "Type": "AWS::RDS::DBInstance",
+      "Properties": {
+        "DBName": "csye6225",
+        "AllocatedStorage": "100",
+        "DBInstanceClass": "db.t2.medium",
+        "Engine": "MySQL",
+        "MasterUsername": {
+          "Fn::Sub": "${RDSUserName}"
+        },
+        "MasterUserPassword": {
+          "Fn::Sub": "${RDSPassword}"
+        },
+        "MultiAZ": false,
+        "DBInstanceIdentifier": "csye6225-spring2018",
+        "PubliclyAccessible": false,
+        "Port": "3306",
+        "DBSubnetGroupName": {
+          "Ref": "RDSSubnetGroup"
+        },
+        "VPCSecurityGroups":[
+          {"Ref":"DBServerSecurityGroup"}
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-csye6225-RDSInstance"
+            }
+          }
+        ]
+      }
+    },
+    "DynamoDBTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "Id",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "Id",
+            "KeyType": "HASH"
+          }
+        ],
+        "ProvisionedThroughput": {
+          "ReadCapacityUnits": "1",
+          "WriteCapacityUnits": "1"
+        },
+        "TableName": "csye6225",
+        "TimeToLiveSpecification":{
+            "AttributeName" : "TTL",
+            "Enabled" :true
+          },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-csye6225-DynamoDBTable"
+            }
+          }
+        ]
+      }
+    },
+    "S3Bucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketName": {
+          "Fn::Sub": "${DomainNameParameter}.csye6225.com"
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "EC2Instance": {
+      "Description": "The EC2 Instance for Web Server",
+      "Value": {
+        "Ref": "EC2Instance"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-EC2InstanceID"
+        }
+      }
+    },
+    "WebServerSecurityGroup": {
+      "Description": "The security group id for the Web Server",
+      "Value": {
+        "Ref": "WebServerSecurityGroup"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-WebServerSecurityGroupID"
+        }
+      }
+    },
+    "DBServerSecurityGroup": {
+      "Description": "The security group id for the RDS Server",
+      "Value": {
+        "Ref": "DBServerSecurityGroup"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-DBServerSecurityGroupID"
+        }
+      }
+    },
+    "RDSInstance": {
+      "Description": "The RDS Instance for Backend Database",
+      "Value": {
+        "Ref": "RDSInstance"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-RDSInstanceID"
+        }
+      }
+    },
+    "DynamoDBTable": {
+      "Description": "The DynamoDBTableId",
+      "Value": {
+        "Ref": "DynamoDBTable"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-DynamoDBTableID"
+        }
+      }
+    },
+    "S3Bucket": {
+      "Description": "The S3Bucket",
+      "Value": {
+        "Ref": "S3Bucket"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-S3BucketID"
+        }
+      }
+    }
+  }
+}

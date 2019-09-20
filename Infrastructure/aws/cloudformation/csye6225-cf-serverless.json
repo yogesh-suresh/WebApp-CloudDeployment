@@ -1,0 +1,165 @@
+{
+	"AWSTemplateFormatVersion": "2010-09-09",
+	"Description": "Serverless stack - CSYE 6225 - Fall 2018",
+	"Parameters":{
+		"LambdaS3BucketParameter": {
+			"Description": "S3 Bucket Lambda",
+			"Type": "String"
+		},
+		"LambdaS3ZipFileParameter": {
+			"Description": "S3 Bucket Lambda",
+			"Type": "String"
+		},
+		"DomainNameParameter": {
+			"Description": "Domain Name parameter",
+			"Type": "String"
+		},
+		"SenderNameParameter": {
+			"Description": "Sender name parameter",
+			"Type": "String"
+		}
+	},
+	"Resources": {
+			"lambdaDynamoDBFunc": {
+		  			"Type": "AWS::Lambda::Function",
+		  			"Properties": {
+												"FunctionName":"lambda",
+										    "Handler": "index.handler",
+										    "Role": { "Fn::GetAtt" : ["LambdaRole", "Arn"] },
+										    "Code": {
+										      			"S3Bucket": {"Fn::Sub": "${LambdaS3BucketParameter}"},
+										      			"S3Key": {"Fn::Sub": "${LambdaS3ZipFileParameter}"}
+										    },
+										    "Runtime": "nodejs8.10",
+										    "Timeout": 25,
+												"Environment":{
+  																	"Variables" : { "domain":{"Fn::Sub": "${DomainNameParameter}"},
+																			 							"sendermail":{"Fn::Sub": "${SenderNameParameter}@${DomainNameParameter}"}
+
+																		}
+												},
+										    "TracingConfig": {
+										      "Mode": "Active"
+		   										}
+		  								}
+		},
+		"LambdaRole": {
+			"Type": "AWS::IAM::Role",
+			"Properties": {
+				"AssumeRolePolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [
+						{
+							"Effect": "Allow",
+							"Principal": {
+								"Service": [
+									"lambda.amazonaws.com"
+								]
+							},
+							"Action": [
+								"sts:AssumeRole"
+							]
+						}
+					]
+				},
+			"Policies":[
+					{
+						"PolicyName":"AWSLambdaRole",
+						"PolicyDocument":
+						{
+						    "Version": "2012-10-17",
+						    "Statement": [
+						        {
+						            "Effect": "Allow",
+						            "Action": [
+						                "dynamodb:DeleteItem",
+						                "dynamodb:GetItem",
+						                "dynamodb:PutItem",
+						                "dynamodb:Scan",
+						                "dynamodb:UpdateItem"
+						            ],
+						            "Resource": {"Fn::Sub" :"arn:aws:dynamodb:us-east-1:${AWS::AccountId}:table/*"}
+						        }
+						    ]
+						}
+					},
+					{
+						"PolicyName":"Amazonsesfullaccesslambda",
+						"PolicyDocument":
+						{
+						    "Version": "2012-10-17",
+						    "Statement": [
+						        {
+						            "Effect": "Allow",
+						            "Action": [
+						                "ses:*"
+						            ],
+						            "Resource": "*"
+						        }
+						    ]
+						}
+					},
+					{
+						"PolicyName":"Amazonsnsfullaccesslambda",
+						"PolicyDocument":
+						{
+						    "Version": "2012-10-17",
+						    "Statement": [
+						        {
+						            "Action": [
+						                "sns:*"
+						            ],
+						            "Effect": "Allow",
+						            "Resource": "*"
+						        }
+						    ]
+						}
+					},
+					{
+						"PolicyName":"XRayFullAccess",
+						"PolicyDocument":
+						{
+					    "Version": "2012-10-17",
+					    "Statement": [
+					        {
+					            "Effect": "Allow",
+					            "Action": [
+					                "xray:*"
+					            ],
+					            "Resource": [
+					                "*"
+					            ]
+					        }
+					    ]
+					}
+					}
+				],
+				"RoleName": "LambdaRole"
+			}
+		},
+	  "LambdaInvokePermission": {
+	    "Type": "AWS::Lambda::Permission",
+	    "Properties": {
+	      "Action": "lambda:InvokeFunction",
+	      "Principal": "sns.amazonaws.com",
+				"SourceArn": {"Fn::Sub" : "arn:aws:sns:us-east-1:${AWS::AccountId}:password_reset"},
+	      "FunctionName": {
+        "Fn::GetAtt": [ "lambdaDynamoDBFunc", "Arn" ]
+      }
+	    }
+	  }
+	},
+	"Outputs":{
+	  "Lambda": {
+	    "Description": "Lambda function",
+	    "Value": {
+	      "Ref": "lambdaDynamoDBFunc"
+	    },
+	    "Export": {
+	      "Name": {
+	        "Fn::Sub": "arn:aws:lambda:us-east-1:${AWS::AccountId}:function:lambda"
+	      }
+	    }
+	  }
+	}
+}
